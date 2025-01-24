@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <limits.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <errno.h>
