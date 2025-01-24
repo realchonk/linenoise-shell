@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <errno.h>
@@ -562,20 +563,98 @@ void complete (const char *s, linenoiseCompletions *c)
 	free_args (args, len);
 }
 
-int main (void)
+const char *prompt = "$ ";
+void shell_sync (void)
 {
 	char *line;
 
-	linenoiseHistorySetMaxLen (HISTFILESIZE);
-	linenoiseHistoryLoad (HISTFILE);
-	linenoiseSetCompletionCallback (complete);
-
-	while ((line = linenoise ("$ ")) != NULL) {
+	while ((line = linenoise (prompt)) != NULL) {
 		linenoiseHistoryAdd (line);
 
 		runcom (line);
 		
 		linenoiseFree (line);
+	}
+}
+
+static struct linenoiseState ls;
+void handle_sig (int sig)
+{
+	linenoiseHide (&ls);
+	printf ("signal received: %s\n", strsignal (sig));
+	linenoiseShow (&ls);
+}
+
+void shell_async (void)
+{
+	struct timeval tv;
+	char buf[1024], *line;
+	fd_set fds;
+	int ret;
+
+	signal (SIGUSR1, handle_sig);
+	signal (SIGUSR2, handle_sig);
+
+	while (1) {
+		linenoiseEditStart (&ls, -1, -1, buf, sizeof (buf), prompt);
+
+		while (1) {
+			FD_ZERO (&fds);
+			FD_SET (ls.ifd, &fds);
+			tv.tv_sec = 1;
+			tv.tv_usec = 0;
+
+			ret = select (ls.ifd + 1, &fds, NULL, NULL, &tv);
+
+			if (ret < 0) {
+				if (errno == EAGAIN || errno == EINTR)
+					continue;
+				perror ("select()");
+				exit (1);
+			}
+
+			if (ret == 0) {
+				continue;
+			}
+
+			if (FD_ISSET (ls.ifd, &fds)) {
+				line = linenoiseEditFeed (&ls);
+				if (line != linenoiseEditMore)
+					break;
+			}
+		}
+
+		linenoiseEditStop (&ls);
+		if (line == NULL)
+			return;
+		runcom (line);
+	}
+}
+
+int main (int argc, char *argv[])
+{
+	int option;
+	bool async = false;
+
+	while ((option = getopt (argc, argv, "a")) != -1) {
+		switch (option) {
+		case 'a':
+			async = true;
+			break;
+		default:
+			fprintf (stderr, "usage: shell [-a]\n");
+			return 1;
+		}
+	}
+
+	linenoiseHistorySetMaxLen (HISTFILESIZE);
+	linenoiseHistoryLoad (HISTFILE);
+	linenoiseSetCompletionCallback (complete);
+
+	if (async) {
+		shell_async ();
+	} else {
+		shell_sync ();
 	}
 
 	linenoiseHistorySave (HISTFILE);
